@@ -573,8 +573,10 @@ prepare_dev_release() {
 }
 
 prepare_manifest() {
-  select_infrastructure \$*
-  prepare_stemcell \$*
+  target=\${1:-} ; shift
+  select_infrastructure \${target}
+  prepare_stemcell \${target}
+
   releaseName=\$(basename \$PWD | sed -e 's/-boshrelease//')
   directorCPI=\$(bosh status | awk '/CPI/{print \$2}')
   directorUUID=\$(awk -F: '/target_uuid/{print \$2}' ~/.bosh_config | tr -d ' ')
