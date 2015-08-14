@@ -21,15 +21,15 @@ createPackage() {
 
 ## packaging
 
-The package script is called by BOSH during the compilation phase on a 
+The package script is called by BOSH during the compilation phase on a
 compilation VM after compiling any dependencies listed in the spec file and
 providing them to this script located within \`/var/vcap/packages/...\`.
 
 ## prepare
 
-The package's prepare script is used to download necessary files and prepare the 
-blobs and sources which this BOSH job depends on. This also acts as 
-documentation as to the original source of the blobs used for this package. 
+The package's prepare script is used to download necessary files and prepare the
+blobs and sources which this BOSH job depends on. This also acts as
+documentation as to the original source of the blobs used for this package.
 This script will be called from the release directory's 'prepare blobs' script.
 
 ## spec
@@ -107,10 +107,10 @@ and what the development workflow is.
 
 ## Workflow
 
-Dynamic data from BOSH properties should only be injected to \`templates/config/\` 
+Dynamic data from BOSH properties should only be injected to \`templates/config/\`
 files and the environment definition file located at \`templates/shell/env.rb\`.
 
-Otherwise you edit the \`templates/shell/functions\` if you need to make any behavior 
+Otherwise you edit the \`templates/shell/functions\` if you need to make any behavior
 tweaks, see the description of this below.
 
 ## templates/bin/control
@@ -122,20 +122,20 @@ binary executable.
 ## templates/bin/${jobName}
 
 By default this file is setup to exec an binary/script stored within the package
-path of the same name as the job. If you do not have a package with a binary 
-that you are running directly which represents the job itself then delete the 
-\`user exec\` line within the while loop and replace it with code to do what the 
-job needs to do. For a simple example, to run a command every minute you would 
+path of the same name as the job. If you do not have a package with a binary
+that you are running directly which represents the job itself then delete the
+\`user exec\` line within the while loop and replace it with code to do what the
+job needs to do. For a simple example, to run a command every minute you would
 place that command followed by a second command 'sleep 60' within the while loop.
 
-If the binary/script for the job you are running requires special handling 
+If the binary/script for the job you are running requires special handling
 in order to gracefully shut down place this logic within the \`graceful_stop()\`
 function in the \`templates/shell/functions\` file.
 
 ## templates/shell/env.rb
 
-This script file is where you will set up all of the environment and prepare 
-directory hierarchies, etc... This file is where you assign variables from 
+This script file is where you will set up all of the environment and prepare
+directory hierarchies, etc... This file is where you assign variables from
 BOSH manifest properties.
 
 ## templates/config/
@@ -146,8 +146,8 @@ BOSH manifest properties within the configuration file templates.
 
 ## templates/shell/functions
 
-This script contains the start and stop functionality of the job's binary 
-executable. The \`shell/env\` will be loaded before this functions file is 
+This script contains the start and stop functionality of the job's binary
+executable. The \`shell/env\` will be loaded before this functions file is
 loaded. Any and all customization and functionality of the starting / stopping
 of the BOSH job should be done in this file.
 
@@ -163,7 +163,7 @@ This is the BOSH service job specification file, it is used to declare:
 * The name of the job.
 * The listing of package names required by the job.
 * The mapping of files to their final destination within the runtime job path.
-* A listing of :\`properties:\`, where each property specifies it's 
+* A listing of :\`properties:\`, where each property specifies it's
   \`description:\` and \`default:\` value if any.
 
 EOF
@@ -180,12 +180,12 @@ echo \$\$ > \${pidFile} # Write the shell script's PID to the pidFile
 set_pid
 if (( \${pid} == 0 )) ; then echo \$\$ > \${pidFile} ; fi
 
-if [[ -z \${1:-} ]] ; then fail "\$0 start|stop" ; fi ; action=\$1 ; shift 
+if [[ -z \${1:-} ]] ; then fail "\$0 start|stop" ; fi ; action=\$1 ; shift
 case \${action} in
   (start)
-      user exec \${pkgPath}/bin/${jobName}
+    user exec \${pkgPath}/bin/${jobName}
     ;;
-  (stop)  
+  (stop)
     send_signal TERM
     ;;
   (*)
@@ -244,9 +244,9 @@ EOF
   cat > jobs/${jobName}/templates/shell/functions <<EOF
 #!/usr/bin/env bash
 
-fail() { 
-  echo "\$*" >&2 
-  exit 1 
+fail() {
+  echo "\$*" >&2
+  exit 1
 }
 
 user() {
@@ -265,7 +265,7 @@ set_pid() {
   fi
 }
 
-send_signal() { 
+send_signal() {
   if (( \${pid:-0} > 0 ))
   then kill -\${1} \${pid}
   fi
@@ -275,7 +275,7 @@ send_signal() {
 turn_debugging_on() {
   echo "Turning Debugging On"
   export PS4='+(\${BASH_SOURCE}:\${LINENO})> \${FUNCNAME[0]:+\${FUNCNAME[0]}(): }'
-  export DEBUG="true" 
+  export DEBUG="true"
   set -x
   set -v
 }
@@ -353,11 +353,11 @@ createRelease() {
   done
 
   cat > docs/${releaseName}.md <<EOF
-# ${releaseName} Project Specific Notes 
+# ${releaseName} Project Specific Notes
 EOF
 
   cat > docs/notes.md <<EOF
-# BOSH Release Notes 
+# BOSH Release Notes
 
 ## BOSH Lite
 
@@ -379,8 +379,8 @@ vagrant destroy --force
 
 ## Debugging on a VM
 
-For convenience when you ssh to a VM run the following line in order to add all 
-of the package binaries to your current path 
+For convenience when you ssh to a VM run the following line in order to add all
+of the package binaries to your current path
 
 \`\`\`sh
 for _path in \$(ls -d /var/vcap/packages/*/*bin) ; do PATH="\${_path}:\${PATH}" ; done ; export PATH
@@ -403,7 +403,7 @@ watch -n 2 monit summary
 \`\`\`
 
 Which will run the \`monit summary\` command every 2 seconds with it's output as
-the only thing on the screen. Press \`^C\` (control+C) in order to exit when you 
+the only thing on the screen. Press \`^C\` (control+C) in order to exit when you
 are done.
 
 To inspect the pacages that BOSH has placed on the box:
@@ -460,7 +460,7 @@ latest_uploaded_stemcell() {
     sort -nr -k2 | head -n1 | awk '{ print \$1 }'
 }
 
-usage() { 
+usage() {
   echo "
 Usage: \$0 <prepare|blobs|manifest|release|destroy> [options]
 Where [options] for the 'prepare', 'manifest' and 'stemcell' actions are:
@@ -484,8 +484,8 @@ select_infrastructure() {
   if ! [[ -n \${infrastructure:-} ]]
   then
     usage
-    fail 
-  fi 
+    fail
+  fi
 }
 
 prepare_blobs() {
@@ -494,7 +494,7 @@ prepare_blobs() {
   for script in \${releasePath}/packages/*/prepare
   do
     if [[ -s \${script} ]]
-    then 
+    then
       echo \${script}
       ( cd \${releasePath}/blobs ; \${SHELL} \${script} )
     fi
@@ -520,37 +520,37 @@ prepare_stemcell() {
       fi
       hypervisor="xen"
       case \${stemcellOS} in
-        (ubuntu) 
-          stemcellURL="http://bosh.io/stemcells/bosh-aws-xen-light-ubuntu-trusty-go_agent" 
+        (ubuntu)
+          stemcellURL="http://bosh.io/stemcells/bosh-aws-xen-light-ubuntu-trusty-go_agent"
           ;;
-        (centos) 
-          stemcellURL="http://bosh.io/stemcells/bosh-aws-xen-light-centos-7-go_agent" 
+        (centos)
+          stemcellURL="http://bosh.io/stemcells/bosh-aws-xen-light-centos-7-go_agent"
           ;;
-        (*) 
-          fail "Unknown Stemcell OS '\${stemcellOS}'" 
+        (*)
+          fail "Unknown Stemcell OS '\${stemcellOS}'"
           ;;
       esac
       ;;
-    (warden) 
+    (warden)
       if ! [[ "\${directorName}" =~ "Bosh Lite Director" ]]
       then fail "No BOSH Lite  bosh-lite with warden CPI.\nPlease use 'bosh target' first."
       fi
       hypervisor="warden"
       case \${stemcellOS} in
         (ubuntu)
-          stemcellURL="https://bosh.io/d/stemcells/bosh-warden-boshlite-ubuntu-trusty-go_agent" 
+          stemcellURL="https://bosh.io/d/stemcells/bosh-warden-boshlite-ubuntu-trusty-go_agent"
           ;;
-        (centos) 
-          stemcellURL="https://bosh.io/d/stemcells/bosh-warden-boshlite-centos-go_agent" 
+        (centos)
+          stemcellURL="https://bosh.io/d/stemcells/bosh-warden-boshlite-centos-go_agent"
           ;;
-        (*) 
-          fail "Unknown Stemcell OS '\${stemcellOS}'" 
+        (*)
+          fail "Unknown Stemcell OS '\${stemcellOS}'"
           ;;
       esac
       ;;
     (*)
-      usage 
-      fail 
+      usage
+      fail
       ;;
   esac
   shift
@@ -560,7 +560,7 @@ prepare_stemcell() {
   then
     stemcellFile="\${stemcellsPath}/\$(basename \${stemcellURL}).tar.gz"
     if [[ -s \${stemcellFile} ]]
-    then 
+    then
       echo -e "\nUploading local stemcell \${stemcellFile}..."
       bosh upload stemcell \${stemcellFile}
     else
@@ -625,7 +625,7 @@ releasePath=\$(cd \$(dirname \$0) ; echo \$PWD)
 tmpPath=\${releasePath}/tmp
 manifestsPath=\${releasePath}/manifests
 stemcellsPath=\${releasePath}/stemcells
-releaseName=\$(awk -F: '/final_name/{print \$2}' config/final.yml | tr -d ' ') 
+releaseName=\$(awk -F: '/final_name/{print \$2}' config/final.yml | tr -d ' ')
 templatesPath="\${releasePath}/templates"
 
 if (( \$# > 0 ))
@@ -672,9 +672,9 @@ case \${action} in
     echo "bosh -n delete deployment ${releaseName} --force"
     bosh -n delete deployment ${releaseName} --force
     ;;
-  (*) 
-    usage 
-    fail "Unknown action \${action}." 
+  (*)
+    usage
+    fail "Unknown action \${action}."
     ;;
 esac
 
@@ -1010,7 +1010,7 @@ bosh download manifest ${releaseName}-development ~/workspace/manifests/${releas
 bosh deployment ~/workspace/manifests/${releaseName}.yml
 \`\`\`
 
-Alternatively, you can make your manifest. For example to prepare a manifest for 
+Alternatively, you can make your manifest. For example to prepare a manifest for
 bosh-lite (warden) using the 'centos' stemcell we would do the following:
 
 \`\`\`sh
@@ -1061,7 +1061,7 @@ Now you can deploy,
 bosh -n deploy
 \`\`\`
 
-Note that for each job you create in your release that you want to run on a 
+Note that for each job you create in your release that you want to run on a
 Job VM you must add a \`templates:\` entry with the \`name:\` of the template
 and the \`release:\` from which it comes.
 
@@ -1070,7 +1070,7 @@ and the \`release:\` from which it comes.
 The script \`./${releaseName}-dev blobs\` is used to prepare the \`blobs/\` directory
 runs each package's \`prepare\` script from within the \`blobs/\`
 directory. This will run each package's \`prepare\` script, if it exists,
-which *should* download and prepare that package's required blobs 
+which *should* download and prepare that package's required blobs
 (source tarballs, etc...) into the {package}/ directory.
 
 ## Development
@@ -1102,7 +1102,7 @@ bosh -n deploy
 
 See \`docs/notes.md\` for more information.
 
-In order to gain access to one of the VMs, from a terminal \`bosh ssh ${releaseName} {VM Index}\`, 
+In order to gain access to one of the VMs, from a terminal \`bosh ssh ${releaseName} {VM Index}\`,
 for example to ssh to the first node:
 \`\`\`sh
 bosh ssh ${releaseName} 0 # Hop on and have a look around...
@@ -1169,9 +1169,9 @@ packages=()
 srcs=()
 while (( $# ))
 do
-  token=$1 
+  token=$1
   shift 1
-  case ${token} in 
+  case ${token} in
     (-job|-jobs|job|jobs) kind=job ;;
     (-release|release) kind=release ;;
     (package|packages|-package|-packages) kind=package ;;
@@ -1205,4 +1205,3 @@ do createSrc ${package}
 done
 
 exit 0
-
