@@ -1,0 +1,1208 @@
+#!/usr/bin/env bash
+#
+# Usage:
+#   release <name>
+#   jobs <job name>...
+#   packages <package name>...
+#   src <src name>...
+#
+# This currently represents *binary* jobs by default.
+# TODO: Add the concept of *script* jobs with the associated adjustments.
+
+fail() { echo $* >&2 ; exit 1 ; }
+
+createPackage() {
+  local _package=$1
+  mkdir -p {packages,src,blobs}/${_package}/
+  touch {packages,src,blobs}/${_package}/.gitkeep
+
+  cat > packages/${_package}/README.md <<EOF
+# ${_package} BOSH package
+
+## packaging
+
+The package script is called by BOSH during the compilation phase on a 
+compilation VM after compiling any dependencies listed in the spec file and
+providing them to this script located within \`/var/vcap/packages/...\`.
+
+## prepare
+
+The package's prepare script is used to download necessary files and prepare the 
+blobs and sources which this BOSH job depends on. This also acts as 
+documentation as to the original source of the blobs used for this package. 
+This script will be called from the release directory's 'prepare blobs' script.
+
+## spec
+
+The spec file is used to declare the package name, array of dependency package
+names as well as a list of the blob files required by the package script.
+
+EOF
+
+  cat > packages/${_package}/packaging <<EOF
+#!/usr/bin/env bash
+set -e
+
+package="${_package}"
+version="1.0.0"
+file="\${package}-\${version}.tar.gz"
+
+tar zxvf \${package}/\${file}
+
+cd \${file//.tar*}
+
+./configure --prefix=\${BOSH_INSTALL_TARGET}
+
+make
+
+make install
+EOF
+
+  cat > packages/${_package}/prepare <<EOF
+#!/usr/bin/env bash
+
+package="${_package}"
+version="1.0.0"
+file="\${package}-\${version}.tar.gz"
+url="http://some...download...url...prefix.../\${file}"
+
+
+if [[ ! -s "\${package}/\${file}" ]]
+then
+  mkdir -p \${package}
+  curl -s "\${url}" -o "\${package}/\${file}"
+fi
+EOF
+
+chmod +x packages/${_package}/{packaging,prepare}
+
+  cat > packages/${_package}/spec <<EOF
+---
+name: ${_package}
+dependencies: []
+files:
+  - ${_package}/${_package}-*
+EOF
+
+}
+
+createJob() {
+  local jobName=${1}
+  if ! [[ -d jobs ]]
+  then fail "No ./jobs directory found, if you intended this to be a release dir then create it and try again."
+  fi
+  mkdir -p jobs/${jobName}
+
+  jobDirs=( jobs/${jobName}/templates/{bin,config,shell} )
+  mkdir -p ${jobDirs[@]}
+  touch jobs/${jobName}/templates/config/.gitkeep
+
+  cat > jobs/${jobName}/README.md <<EOF
+# ${jobName} BOSH Service Job
+
+[Official BOSH Release Documentation](http://bosh.io/docs/create-release.html)
+
+What follows is an explanation about the pieces contained within this BOSH job
+and what the development workflow is.
+
+## Workflow
+
+Dynamic data from BOSH properties should only be injected to \`templates/config/\` 
+files and the environment definition file located at \`templates/shell/env.rb\`.
+
+Otherwise you edit the \`templates/shell/functions\` if you need to make any behavior 
+tweaks, see the description of this below.
+
+## templates/bin/control
+
+The script should never be modified, it's sole purpose
+is to be called by the monit daemon to *start*, *stop* and *monitor* the job's
+binary executable.
+
+## templates/bin/${jobName}
+
+By default this file is setup to exec an binary/script stored within the package
+path of the same name as the job. If you do not have a package with a binary 
+that you are running directly which represents the job itself then delete the 
+\`user exec\` line within the while loop and replace it with code to do what the 
+job needs to do. For a simple example, to run a command every minute you would 
+place that command followed by a second command 'sleep 60' within the while loop.
+
+If the binary/script for the job you are running requires special handling 
+in order to gracefully shut down place this logic within the \`graceful_stop()\`
+function in the \`templates/shell/functions\` file.
+
+## templates/shell/env.rb
+
+This script file is where you will set up all of the environment and prepare 
+directory hierarchies, etc... This file is where you assign variables from 
+BOSH manifest properties.
+
+## templates/config/
+
+This directory is optional, if your binary requires any configuration files you
+should create them in here with a \`.erb\` extension. This allows you to use
+BOSH manifest properties within the configuration file templates.
+
+## templates/shell/functions
+
+This script contains the start and stop functionality of the job's binary 
+executable. The \`shell/env\` will be loaded before this functions file is 
+loaded. Any and all customization and functionality of the starting / stopping
+of the BOSH job should be done in this file.
+
+## monit
+
+This is a monit configuration file which specifies how to start, stop and monitor
+(pidfile to watch) the job's binary executable.
+
+## spec
+
+This is the BOSH service job specification file, it is used to declare:
+
+* The name of the job.
+* The listing of package names required by the job.
+* The mapping of files to their final destination within the runtime job path.
+* A listing of :\`properties:\`, where each property specifies it's 
+  \`description:\` and \`default:\` value if any.
+
+EOF
+
+  cat > jobs/${jobName}/templates/bin/control <<EOF
+#!/usr/bin/env bash
+
+source "\$(dirname \$(dirname \${0}))/shell/env"
+
+trap graceful_stop SIGTERM # Handle term signal sent by control script stop action.
+
+echo \$\$ > \${pidFile} # Write the shell script's PID to the pidFile
+
+set_pid
+if (( \${pid} == 0 )) ; then echo \$\$ > \${pidFile} ; fi
+
+if [[ -z \${1:-} ]] ; then fail "\$0 start|stop" ; fi ; action=\$1 ; shift 
+case \${action} in
+  (start)
+      user exec \${pkgPath}/bin/${jobName}
+    ;;
+  (stop)  
+    send_signal TERM
+    ;;
+  (*)
+    fail "Unknown action ${action}"
+    ;;
+esac
+;;
+EOF
+
+  cat > jobs/${jobName}/templates/shell/env.erb <<EOF
+#!/usr/bin/env bash
+
+set -e # exit immediately if a simple command exits with a non-zero status
+set -u # report the usage of uninitialized variables
+
+vmName="<%= name %>" # BOSH VM name
+vmIndex="<%= index %>" # Index within cluster
+deploymentName="<%= spec.deployment %>"
+domainName="<%= spec.dns_domain_name %>"
+vmFullName="\${vmName}/\${vmIndex}" # full job name
+nodeName="\${deploymentName}-\${vmName}-\${vmIndex}"
+
+jobName="${jobName}"
+
+logPath="/var/vcap/sys/log/\${jobName}"
+mkdir -p "\${logPath}"
+exec &>> "\${logPath}/\${jobName}.log" # STD{OUT,ERR}
+echo -e "\$(date +'%Y-%m-%dT%H:%M:%S') \$(whoami) > \$0 \$*"
+
+source /var/vcap/jobs/\${jobName}/shell/functions
+
+<% if p('${jobName//-/_}.debug') == "true" %>turn_debugging_on<% end %>
+
+jobPath="/var/vcap/jobs/\${jobName}"
+pkgPath="/var/vcap/packages/\${jobName}"
+runPath="/var/vcap/sys/run/\${jobName}"
+tmpPath="/var/vcap/sys/tmp/\${jobName}"
+storePath="/var/vcap/store/\${jobName}"
+
+userName="root"
+groupName="root"
+LANG="en_US.UTF-8"
+HOME="\${HOME:-"/home/\${userName}"}"
+pidFile="\${runPath}/\${jobName}.pid"
+LD_LIBRARY_PATH="\${LD_LIBRARY_PATH:-}"
+export LANG HOME LD_LIBRARY_PATH
+
+add_packages_to_path
+
+configure_job_paths
+
+set_pid
+
+EOF
+
+  cat > jobs/${jobName}/templates/shell/functions <<EOF
+#!/usr/bin/env bash
+
+fail() { 
+  echo "\$*" >&2 
+  exit 1 
+}
+
+user() {
+  local _action=\$1 ; shift
+  case \${_action} in
+    (exec)  exec chpst -u "\${userName}:\${groupName}" "\$@" ;;
+    (run)   chpst -u "\${userName}:\${groupName}" "\$@"      ;;
+    (chown) chown -R "\${userName}:\${groupName}" "\$@"      ;;
+  esac
+}
+
+set_pid() {
+  pid=0
+  if [[ -s \${pidFile} ]]
+  then pid=\$(head -1 \${pidFile})
+  fi
+}
+
+send_signal() { 
+  if (( \${pid:-0} > 0 ))
+  then kill -\${1} \${pid}
+  fi
+}
+
+
+turn_debugging_on() {
+  echo "Turning Debugging On"
+  export PS4='+(\${BASH_SOURCE}:\${LINENO})> \${FUNCNAME[0]:+\${FUNCNAME[0]}(): }'
+  export DEBUG="true" 
+  set -x
+  set -v
+}
+
+add_packages_to_path() { # Add all packages' /bin & /sbin into \$PATH
+  for _path in \$(ls -d /var/vcap/packages/*/*bin)
+  do PATH="\${_path}:\${PATH}"
+  done ; export PATH
+}
+
+configure_job_paths() {
+  paths=(
+    "\${jobPath}"
+    "\${runPath}"
+    "\${logPath}"
+    "\${tmpPath}"
+    "\${storePath}"
+  )
+  if (( \${UID} == 0 ))
+  then
+    for _path in "\${paths[@]}"
+    do
+      [[ -d \${_path} ]] || mkdir -p "\${_path}"
+      chown -R \${userName}:\${groupName} "\${_path}"
+      chmod 0775 "\${_path}"
+    done
+  fi
+}
+
+graceful_stop() {
+  rm -f \${pidFile}
+  exit 0 # Normal exit, return code 0
+}
+
+EOF
+
+  cat > jobs/${jobName}/monit <<EOF
+check process ${jobName}
+  with pidfile /var/vcap/sys/run/${jobName}/${jobName}.pid
+  start program "/var/vcap/jobs/${jobName}/bin/control start" with timeout 30 seconds
+  stop program "/var/vcap/jobs/${jobName}/bin/control stop"
+  group vcap
+EOF
+
+  cat > jobs/${jobName}/spec <<EOF
+---
+name: ${jobName}
+packages:
+- ${jobName}
+templates:
+  bin/control: bin/control
+  bin/${jobName}: bin/${jobName}
+  shell/env.erb: shell/env
+  shell/functions: shell/functions
+properties:
+  ${jobName//-/_}.debug:
+    description: "Enable debug output, can be 'true' or 'false' (default)."
+    default: "false"
+EOF
+
+  chmod +x jobs/${jobName}/templates/bin/*
+
+  echo "job ${jobName} created"
+}
+
+createRelease() {
+  local releaseName=$1
+
+  mkdir -p ${releaseName}-boshrelease/
+  cd ${releaseName}-boshrelease
+
+  _dirs=(templates/infrastructure config packages src blobs jobs manifests stemcells docs)
+  for _dir in ${_dirs[@]}
+  do mkdir -p ${_dir} ; touch ${_dir}/.gitkeep
+  done
+
+  cat > docs/${releaseName}.md <<EOF
+# ${releaseName} Project Specific Notes 
+EOF
+
+  cat > docs/notes.md <<EOF
+# BOSH Release Notes 
+
+## BOSH Lite
+
+In order to get your bosh-lite up and running, first install Vagrant and Virtualbox
+and then do:
+
+\`\`\`sh
+git clone git://github.com/cloudfoundry/bosh-lite
+cd bosh-lite
+vagrant up
+./bin/add-route
+\`\`\`
+
+If you wish to destroy BOSH Lite:
+
+\`\`\`sh
+vagrant destroy --force
+\`\`\`
+
+## Debugging on a VM
+
+For convenience when you ssh to a VM run the following line in order to add all 
+of the package binaries to your current path 
+
+\`\`\`sh
+for _path in \$(ls -d /var/vcap/packages/*/*bin) ; do PATH="\${_path}:\${PATH}" ; done ; export PATH
+\`\`\`
+(eg. copy and paste it into the terminal window)
+
+In order to examine the status of your BOSH services you can run:
+\`\`\`sh
+monit summary
+\`\`\`
+
+If you want to restart a service process, say consul, you would do it as follows:
+\`\`\`sh
+monit restart consul
+\`\`\`
+
+Then you can watch the status as it restarts with the following command:
+\`\`\`sh
+watch -n 2 monit summary
+\`\`\`
+
+Which will run the \`monit summary\` command every 2 seconds with it's output as
+the only thing on the screen. Press \`^C\` (control+C) in order to exit when you 
+are done.
+
+To inspect the pacages that BOSH has placed on the box:
+
+\`\`\`sh
+ls /var/vcap/packages
+\`\`\`
+
+To inspect the jobs that BOSH has placed on the box:
+\`\`\`sh
+ls /var/vcap/jobs
+\`\`\`
+
+Logs for BOSH jobs *should* all be located within:
+\`\`\`sh
+ls /var/vcap/sys/log/*/*.log
+\`\`\`
+
+
+Any persistant data storage for a job will be located within:
+\`\`\`sh
+ls /var/vcap/store/*/
+\`\`\`
+
+EOF
+
+  cat > ${releaseName}-dev <<EOF
+#!/usr/bin/env bash
+
+set -e -u
+
+fail() { echo -e "\$*" ; exit 1 ; }
+
+bosh_cli_check() {
+  if ! command -v bosh &>/dev/null
+  then fail "'bosh' command was not found in your path, please 'gem install bosh_cli' and try again."
+  fi
+}
+
+bosh_target_check() {
+  boshTarget=\$(bosh target 2>&1)
+  case "\${boshTarget}" in
+    (Current\ target\ is*)
+      echo \${boshTarget}
+      ;;
+    (*)
+      fail "A bosh director is not targeted, please target a director and login then try again."
+      ;;
+  esac
+}
+
+latest_uploaded_stemcell() {
+  bosh stemcells | awk "/bosh/&&/\${stemcellOS}/" | awk -F'|' '{ print \$2, \$3 }' |
+    sort -nr -k2 | head -n1 | awk '{ print \$1 }'
+}
+
+usage() { 
+  echo "
+Usage: \$0 <prepare|blobs|manifest|release|destroy> [options]
+Where [options] for the 'prepare', 'manifest' and 'stemcell' actions are:
+  'warden' or 'aws-ec2'
+"
+}
+
+requireCommands() {
+  for cmd in \${@}
+  do
+    if ! command -v \${cmd} &>/dev/null
+    then
+      echo "\${cmd} must be installed and available in the PATH in order to run \$0"
+      exit 1
+    fi
+  done
+}
+
+select_infrastructure() {
+  infrastructure=\${1:-}
+  if ! [[ -n \${infrastructure:-} ]]
+  then
+    usage
+    fail 
+  fi 
+}
+
+prepare_blobs() {
+  [[ -d \${releasePath}/blobs ]] || mkdir \${releasePath}/blobs
+  echo "Preparing all packages..."
+  for script in \${releasePath}/packages/*/prepare
+  do
+    if [[ -s \${script} ]]
+    then 
+      echo \${script}
+      ( cd \${releasePath}/blobs ; \${SHELL} \${script} )
+    fi
+  done
+}
+
+prepare_stemcell() {
+  select_infrastructure \$*
+
+  stemcellOS=\${stemcellOS:-"centos"}
+  directorCPI=\$(bosh status | awk '/CPI/{print \$2}')
+  directorUUID=\$(awk -F: '/target_uuid/{print \$2}' ~/.bosh_config | tr -d ' ')
+  directorName=\$(awk -F: '/target_name/{print \$2}' ~/.bosh_config)
+  deploymentName="\${releaseName}-\${infrastructure}"
+
+
+  [[ -d \${tmpPath} ]] || mkdir -p \${tmpPath}
+
+  case \${infrastructure} in
+    (aws-ec2)
+      if [[ \${directorCPI} != aws ]]
+      then fail "No AWS BOSH Director targeted. Please use 'bosh target' first."
+      fi
+      hypervisor="xen"
+      case \${stemcellOS} in
+        (ubuntu) 
+          stemcellURL="http://bosh.io/stemcells/bosh-aws-xen-light-ubuntu-trusty-go_agent" 
+          ;;
+        (centos) 
+          stemcellURL="http://bosh.io/stemcells/bosh-aws-xen-light-centos-7-go_agent" 
+          ;;
+        (*) 
+          fail "Unknown Stemcell OS '\${stemcellOS}'" 
+          ;;
+      esac
+      ;;
+    (warden) 
+      if ! [[ "\${directorName}" =~ "Bosh Lite Director" ]]
+      then fail "No BOSH Lite  bosh-lite with warden CPI.\nPlease use 'bosh target' first."
+      fi
+      hypervisor="warden"
+      case \${stemcellOS} in
+        (ubuntu)
+          stemcellURL="https://bosh.io/d/stemcells/bosh-warden-boshlite-ubuntu-trusty-go_agent" 
+          ;;
+        (centos) 
+          stemcellURL="https://bosh.io/d/stemcells/bosh-warden-boshlite-centos-go_agent" 
+          ;;
+        (*) 
+          fail "Unknown Stemcell OS '\${stemcellOS}'" 
+          ;;
+      esac
+      ;;
+    (*)
+      usage 
+      fail 
+      ;;
+  esac
+  shift
+
+  stemcell=\${stemcell:-\$(latest_uploaded_stemcell)}
+  if [[ -z \${stemcell} ]]
+  then
+    stemcellFile="\${stemcellsPath}/\$(basename \${stemcellURL}).tar.gz"
+    if [[ -s \${stemcellFile} ]]
+    then 
+      echo -e "\nUploading local stemcell \${stemcellFile}..."
+      bosh upload stemcell \${stemcellFile}
+    else
+      echo -e "\nUploading latest \${hypervisor}/\${stemcellOS} stemcell..."
+      bosh upload stemcell \${stemcellURL}
+    fi
+    stemcell=\$(latest_uploaded_stemcell)
+  fi
+}
+
+prepare_dev_release() {
+  echo "bosh create release --with-tarball --force"
+  bosh create release --with-tarball --force
+  echo "bosh -n upload release"
+  bosh -n upload release
+}
+
+prepare_manifest() {
+  select_infrastructure \$*
+  prepare_stemcell \$*
+  releaseName=\$(basename \$PWD | sed -e 's/-boshrelease//')
+  directorCPI=\$(bosh status | awk '/CPI/{print \$2}')
+  directorUUID=\$(awk -F: '/target_uuid/{print \$2}' ~/.bosh_config | tr -d ' ')
+  directorName=\$(awk -F: '/target_name/{print \$2}' ~/.bosh_config)
+  deploymentName="\${releaseName}-\${infrastructure}"
+
+  requireCommands spiff bosh
+  echo "Preparing to build the manifest... "
+
+  sed \\
+    -e "s/DIRECTOR-UUID/\${directorUUID}/g" \\
+    -e "s/NAME/\${releaseName}/g" \\
+    -e "s/STEMCELL/\${stemcell}/g" \\
+    -e "s/ENVIRONMENT/\${releaseName}-\${ENVIRONMENT:-"dev"}/g" \\
+    "\${templatesPath}/stub.yml" > "\${tmpPath}/targeted-director-stub.yml"
+
+  echo "Merging templates using the spiff..."
+
+  spiff merge \\
+    "\${templatesPath}/deployment.yml" \\
+    "\${templatesPath}/jobs.yml" \\
+    "\${templatesPath}/infrastructure/\${infrastructure}.yml" \\
+    "\${tmpPath}/targeted-director-stub.yml" \\
+    \$* > "\${manifestsPath}/\${deploymentName}-manifest.yml"
+
+  rm "\${tmpPath}/targeted-director-stub.yml"
+
+  echo bosh deployment "\${manifestsPath}/\${deploymentName}-manifest.yml"
+  bosh deployment "\${manifestsPath}/\${deploymentName}-manifest.yml"
+
+  echo "bosh status"
+  bosh status
+}
+
+if [[ \${DEBUG:-"false"} == "true" ]]
+then # Enable xtrace with context if debug is true.
+  export PS4='+(\${BASH_SOURCE}:\${LINENO})> \${FUNCNAME[0]:+\${FUNCNAME[0]}(): }'
+  set -x
+fi
+
+releasePath=\$(cd \$(dirname \$0) ; echo \$PWD)
+tmpPath=\${releasePath}/tmp
+manifestsPath=\${releasePath}/manifests
+stemcellsPath=\${releasePath}/stemcells
+releaseName=\$(awk -F: '/final_name/{print \$2}' config/final.yml | tr -d ' ') 
+templatesPath="\${releasePath}/templates"
+
+if (( \$# > 0 ))
+then
+  action=\$1
+  shift
+else
+  usage
+  fail
+fi
+
+bosh_target_check
+bosh_cli_check
+
+declare -a args
+if (( \${#@} ))
+then args=(\$(echo "\${@}"))
+fi
+case \${action} in
+  (prepare)
+    if (( \${#args[@]} == 0 ))
+    then
+      usage
+      fail
+    fi
+    prepare_blobs
+    prepare_dev_release
+    prepare_stemcell "\${args[@]}"
+    prepare_manifest "\${args[@]}"
+    ;;
+  (release|dev)
+    prepare_dev_release
+    ;;
+  (blobs)
+    prepare_blobs
+    ;;
+  (stemcell)
+    prepare_stemcell "\${args[@]}"
+    ;;
+  (manifest)
+    prepare_manifest "\${args[@]}"
+    ;;
+  (destroy|delete)
+    echo "bosh -n delete deployment ${releaseName} --force"
+    bosh -n delete deployment ${releaseName} --force
+    ;;
+  (*) 
+    usage 
+    fail "Unknown action \${action}." 
+    ;;
+esac
+
+exit 0
+EOF
+
+  chmod +x ${releaseName}-dev
+
+  cat > templates/stub.yml <<EOF
+---
+meta:
+  environment: ENVIRONMENT
+  dns_root: microbosh
+  security_groups:
+    - ${releaseName}
+  stemcell:
+    name: STEMCELL
+
+director_uuid: DIRECTOR-UUID
+
+releases:
+  - name: ${releaseName}
+    version: latest
+EOF
+
+  cat > templates/deployment.yml <<EOF
+meta:
+  environment: (( merge ))
+  stemcell: (( merge ))
+
+name: (( meta.environment ))
+
+director_uuid: (( merge ))
+
+releases: (( merge ))
+
+networks: (( merge ))
+
+jobs: (( merge ))
+
+properties: (( merge ))
+
+compilation:
+  workers: 6
+  network: ${releaseName}
+  reuse_compilation_vms: true
+  cloud_properties: (( merge ))
+
+update:
+  canaries: 1
+  max_in_flight: 1
+  canary_watch_time: 30000-60000
+  update_watch_time: 5000-60000
+  serial: false
+
+resource_pools:
+  - name: small_z1
+    network: ${releaseName}
+    size: (( auto ))
+    stemcell: (( meta.stemcell ))
+    cloud_properties: (( merge ))
+EOF
+
+  cat > templates/jobs.yml <<EOF
+meta:
+  environment: ~
+
+update:
+  canaries: 1
+  max_in_flight: 50
+  canary_watch_time: 1000-30000
+  update_watch_time: 1000-30000
+  serial: false
+
+jobs:
+  - name: ${releaseName}
+    templates:
+    - name: ${releaseName}
+      release: ${releaseName}
+    instances: 0
+    resource_pool: small_z1
+    networks: (( merge ))
+    persistent_disk: 0
+    update:
+      canaries: 10
+    properties:
+      ${releaseName}:
+
+networks: (( merge ))
+
+properties: {}
+EOF
+
+  cat > templates/infrastructure/warden.yml <<EOF
+---
+meta:
+  environment: ${releaseName}-warden
+
+  stemcell:
+    name: bosh-warden-boshlite-ubuntu
+    version: latest
+
+update:
+  canaries: 1
+  max_in_flight: 50
+  canary_watch_time: 1000-30000
+  update_watch_time: 1000-30000
+
+jobs:
+  - name: ${releaseName}
+    instances: 2
+    networks:
+      - name: ${releaseName}
+        static_ips: ~
+    properties:
+      ${releaseName}:
+
+compilation:
+  cloud_properties:
+    name: random
+
+resource_pools:
+  - name: small_z1
+    cloud_properties:
+      name: random
+
+networks:
+- name: ${releaseName}
+  # Assumes up to 5 VMs, including 1 static and 4 dynamic.
+  # Plus 5 (double the size) unused IPs, due to BOSH bug/quirk.
+  subnets:
+  - cloud_properties:
+      name: random
+    range: 10.244.2.0/30
+    reserved:
+    - 10.244.2.1
+    static:
+    - 10.244.2.2
+
+  - cloud_properties:
+      name: random
+    range: 10.244.2.4/30
+    reserved:
+    - 10.244.2.5
+    static: []
+  - cloud_properties:
+      name: random
+    range: 10.244.2.8/30
+    reserved:
+    - 10.244.2.9
+    static: []
+  - cloud_properties:
+      name: random
+    range: 10.244.2.12/30
+    reserved:
+    - 10.244.2.13
+    static: []
+  - cloud_properties:
+      name: random
+    range: 10.244.2.16/30
+    reserved:
+    - 10.244.2.17
+    static: []
+
+  # Bonus double-sized network required due to BOSH oddity
+  - cloud_properties:
+      name: random
+    range: 10.244.2.20/30
+    reserved:
+    - 10.244.2.21
+    static: []
+  - cloud_properties:
+      name: random
+    range: 10.244.2.24/30
+    reserved:
+    - 10.244.2.25
+    static: []
+  - cloud_properties:
+      name: random
+    range: 10.244.2.28/30
+    reserved:
+    - 10.244.2.29
+    static: []
+  - cloud_properties:
+      name: random
+    range: 10.244.2.32/30
+    reserved:
+    - 10.244.2.33
+    static: []
+  - cloud_properties:
+      name: random
+    range: 10.244.2.36/30
+    reserved:
+    - 10.244.2.37
+    static: []
+EOF
+
+  cat > templates/infrastructure/aws-ec2.yml <<EOF
+---
+meta:
+  environment: (( merge ))
+  dns_root: (( merge ))
+  security_groups: (( merge ))
+  persistent_disk: 4096
+
+  stemcell:
+    name: bosh-aws-xen-ubuntu
+    version: latest
+
+jobs:
+  - name: ${releaseName}
+    instances: 2
+    networks:
+      - name: ${releaseName}
+    persistent_disk: (( meta.persistent_disk ))
+    properties:
+      ${releaseName}:
+
+compilation:
+  cloud_properties:
+    instance_type: m1.small
+
+resource_pools:
+  - name: small_z1
+    cloud_properties:
+      instance_type: m1.small
+
+networks:
+  - name: floating
+    type: vip
+    cloud_properties: {}
+  - name: ${releaseName}
+    type: dynamic
+    cloud_properties:
+      security_groups: (( meta.security_groups ))
+EOF
+
+  cat > LICENSE <<EOF
+The MIT License (MIT)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+EOF
+
+  cat > config/final.yml <<EOF
+---
+final_name: ${releaseName}
+EOF
+
+  cat > config/dev.yml <<EOF
+---
+dev_name: ${releaseName}
+EOF
+
+  cat > config/blobs.yml <<EOF
+--- {}
+EOF
+
+  cat > config/settings.yml <<EOF
+---
+provider:
+  name: aws
+  credentials:
+    provider: AWS
+    aws_access_key_id: {{AWS ACCESS KEY ID}}
+    aws_secret_access_key: {{AWS SECRET KEY}}
+  region: us-east-1
+blobstore:
+  name: ${releaseName}-boshrelease
+EOF
+
+  cat > config/private.yml <<EOF
+---
+blobstore:
+  s3:
+    access_key_id: {{S3 ACCESS KEY ID}}
+    secret_access_key: {{S3 SECRET ACCESS KEY}}
+
+EOF
+
+cat > README.md <<EOF
+# ${releaseName} BOSH release
+
+## License
+
+MIT, see LICENSE file.
+
+## Usage: Configuration & Delpoyment
+
+We will walk through an example of using with Cloud Foundry.
+
+Be sure to first target your BOSH Director:
+\`\`\`sh
+bosh target \$BOSH_HOST
+\`\`\`
+
+If you are using bosh-lite you target like so:
+\`\`\`sh
+bosh target 192.168.50.4 lite
+\`\`\`
+
+Now clone this release and cd into the directory:
+\`\`\`sh
+git clone https://.../${releaseName}-boshrelease.git
+cd ${releaseName}-boshrelease
+\`\`\`
+
+If you intend on using a final release upload it like so:
+\`\`\`sh
+bosh upload release releases/${releaseName}-1.yml
+\`\`\`
+
+Next download your manifest file for the deployment targeted so we can edit it and add the release.
+
+\`\`\`sh
+mkdir -p ~/workspace/manifests
+bosh download manifest ${releaseName}-development ~/workspace/manifests/${releaseName}.yml
+bosh deployment ~/workspace/manifests/${releaseName}.yml
+\`\`\`
+
+Alternatively, you can make your manifest. For example to prepare a manifest for 
+bosh-lite (warden) using the 'centos' stemcell we would do the following:
+
+\`\`\`sh
+STEMCELL_OS=centos ./${releaseName}-dev manifest warden
+\`\`\`
+
+Edit the manifest file you downloaded (\`~/workspace/manifests/${releaseName}.yml\`) and add settings as follows.
+
+Add to the list of known \`releases: \`
+
+\`\`\`yaml
+releases:
+#...
+- name: ${releaseName}
+  version: latest
+\`\`\`
+
+For consistency also add to the \`releases: \` section under \`meta: \`
+
+\`\`\`yaml
+meta:
+  environment: ${releaseName}-development
+  releases:
+  - name: cf
+    version: latest
+  - name: ${releaseName}
+    version: latest
+\`\`\`
+
+Add properties such as tags.
+
+\`\`\`yaml
+properties:
+# ... lots of properties ... at bottom put vv
+  ${releaseName}:
+\`\`\`
+
+Now, for every \`instances: \` entry you wish to collocate this release with under \`jobs:\` add the following in the \`templates: \` section:
+
+\`\`\`yaml
+  - name: ${releaseName}
+    release: ${releaseName}
+\`\`\`
+
+Now you can deploy,
+
+\`\`\`yaml
+bosh -n deploy
+\`\`\`
+
+Note that for each job you create in your release that you want to run on a 
+Job VM you must add a \`templates:\` entry with the \`name:\` of the template
+and the \`release:\` from which it comes.
+
+## Deployments Blobs
+
+The script \`./${releaseName}-dev blobs\` is used to prepare the \`blobs/\` directory
+runs each package's \`prepare\` script from within the \`blobs/\`
+directory. This will run each package's \`prepare\` script, if it exists,
+which *should* download and prepare that package's required blobs 
+(source tarballs, etc...) into the {package}/ directory.
+
+## Development
+
+Download your manifest file for the deployment targeted.
+
+Target your BOSH Director as explained above, if you already have a deploy be sure to also download your manifest as per above.
+
+If this is your first time cloning the release repository for develompent first prepare all of the things:
+\`\`\`sh
+./${releaseName}-dev all warden
+\`\`\`
+
+This is equivalent to:
+\`\`\`sh
+./${releaseName}-dev blobs
+./${releaseName}-dev release
+./${releaseName}-dev stemcell warden
+./${releaseName}-dev manifest warden
+\`\`\`
+
+Once these steps have all been completed
+
+\`\`\`sh
+bosh -n deploy
+\`\`\`
+
+## Debugging & QA
+
+See \`docs/notes.md\` for more information.
+
+In order to gain access to one of the VMs, from a terminal \`bosh ssh ${releaseName} {VM Index}\`, 
+for example to ssh to the first node:
+\`\`\`sh
+bosh ssh ${releaseName} 0 # Hop on and have a look around...
+\`\`\`
+
+If you want to destroy and recreate on specific node, say \`${releaseName}/0\`, you do the following:
+
+\`\`\`sh
+bosh -n recreate ${releaseName} 0 --force
+\`\`\`
+
+See \`docs/${releaseName}.md\` for release specific information.
+
+EOF
+
+  touch config/.gitkeep
+
+  git init
+  cat > .gitignore <<'EOF'
+#*
+*#
+*.swp
+*~
+.DS_Store
+.blobs
+.blobs/
+.dev_builds/
+.final_builds/
+.final_builds/jobs/**/*.tgz
+.final_builds/packages/**/*.tgz
+.idea
+.vagrant
+blobs/*
+config/dev.yml
+config/private.yml
+config/settings.yml
+dev_releases/
+my*.yml
+releases/*.tgz
+manifests/*.yml
+stemcells/*z
+tmp/
+EOF
+  git add .
+  git commit -a -m "${releaseName} BOSH Release Initialized."
+
+  echo "${releaseName} BOSH Release created in ${PWD}"
+}
+
+createSrc() {
+  echo "TODO: Implement create src function."
+}
+
+#
+# Usage: bosh-create <action> <name list>
+# Where <action> is one of release|job(s)|package(s)
+# Name list is the list of names to create.
+#
+
+set -x
+declare releaseName
+jobs=()
+packages=()
+srcs=()
+while (( $# ))
+do
+  token=$1 
+  shift 1
+  case ${token} in 
+    (-job|-jobs|job|jobs) kind=job ;;
+    (-release|release) kind=release ;;
+    (package|packages|-package|-packages) kind=package ;;
+    (-src|src) kind=src ;;
+    (*)
+      case ${kind} in
+        (release) releaseName=$token ;;
+        (job) jobs+=($token) ;;
+        (package) packages+=($token) ;;
+        (src) srcs+=($token) ;;
+        (*) fail "One of -release,-job(s),-package(s),-src(s) must be given." ;;
+      esac
+      ;;
+  esac
+done
+
+if [[ -n ${releaseName} ]]
+then createRelease ${releaseName}
+fi
+
+for job in ${jobs[@]}
+do createJob ${job}
+done
+
+for package in ${packages[@]}
+do createPackage ${package}
+done
+
+for src in ${srcs[@]}
+do createSrc ${package}
+done
+
+exit 0
+
