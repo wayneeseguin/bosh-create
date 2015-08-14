@@ -175,12 +175,7 @@ source "\$(dirname \$(dirname \${0}))/shell/env"
 
 trap graceful_stop SIGTERM # Handle term signal sent by control script stop action.
 
-echo \$\$ > \${pidFile} # Write the shell script's PID to the pidFile
-
-set_pid
-if (( \${pid} == 0 )) ; then echo \$\$ > \${pidFile} ; fi
-
-if [[ -z \${1:-} ]] ; then fail "\$0 start|stop" ; fi ; action=\$1 ; shift
+if [[ -z \${1:-} ]] ; then fail "usage: \$0 start|stop" ; fi ; action=\$1 ; shift
 case \${action} in
   (start)
     user exec \${pkgPath}/bin/${jobName}
@@ -189,10 +184,9 @@ case \${action} in
     send_signal TERM
     ;;
   (*)
-    fail "Unknown action ${action}"
+    fail "Unknown action ${action}, usage: $0 start|stop"
     ;;
 esac
-;;
 EOF
 
   cat > jobs/${jobName}/templates/shell/env.erb <<EOF
