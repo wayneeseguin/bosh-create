@@ -336,7 +336,7 @@ EOF
 }
 
 createRelease() {
-  local releaseName=$1
+  local releaseName=${1%-boshrelease}
 
   mkdir -p ${releaseName}-boshrelease/
   cd ${releaseName}-boshrelease
