@@ -195,7 +195,7 @@ esac
 ;;
 EOF
 
-  cat > jobs/${jobName}/templates/shell/env.erb <<EOF
+  cat > jobs/${jobName}/templates/shell/env <<EOF
 #!/usr/bin/env bash
 
 set -e # exit immediately if a simple command exits with a non-zero status
@@ -328,7 +328,7 @@ packages:
 templates:
   bin/control: bin/control
   bin/${jobName}: bin/${jobName}
-  shell/env.erb: shell/env
+  shell/env: shell/env
   shell/functions: shell/functions
 properties:
   ${jobName//-/_}.debug:
