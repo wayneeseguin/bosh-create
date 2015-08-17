@@ -61,6 +61,9 @@ EOF
   cat > packages/${_package}/prepare <<EOF
 #!/usr/bin/env bash
 
+# remove this line once you update the package
+echo -e >&2 "\n!!! You forgot to update the ${_package} prepare script (packages/${_package}/prepare)...\n" ; exit 1
+
 package="${_package}"
 version="1.0.0"
 file="\${package}-\${version}.tar.gz"
