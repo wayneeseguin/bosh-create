@@ -663,9 +663,19 @@ case \${action} in
     prepare_blobs
     ;;
   (stemcell)
+    if (( \${#args[@]} == 0 ))
+    then
+      usage
+      fail
+    fi
     prepare_stemcell "\${args[@]}"
     ;;
   (manifest)
+    if (( \${#args[@]} == 0 ))
+    then
+      usage
+      fail
+    fi
     prepare_manifest "\${args[@]}"
     ;;
   (destroy|delete)
