@@ -184,7 +184,7 @@ case \${action} in
     send_signal TERM
     ;;
   (*)
-    fail "Unknown action ${action}, usage: $0 start|stop"
+    fail "Unknown action ${action}, usage: \$0 start|stop"
     ;;
 esac
 EOF
