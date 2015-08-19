@@ -1077,7 +1077,7 @@ Target your BOSH Director as explained above, if you already have a deploy be su
 
 If this is your first time cloning the release repository for develompent first prepare all of the things:
 \`\`\`sh
-./${releaseName}-dev all warden
+./${releaseName}-dev prepare warden
 \`\`\`
 
 This is equivalent to:
