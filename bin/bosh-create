@@ -586,26 +586,33 @@ prepare_manifest() {
   directorName=\$(awk -F: '/target_name/{print \$2}' ~/.bosh_config)
   deploymentName="\${releaseName}-\${infrastructure}"
 
-  requireCommands spiff bosh
+  requireCommands spruce bosh
   echo "Preparing to build the manifest... "
 
-  sed \\
-    -e "s/DIRECTOR-UUID/\${directorUUID}/g" \\
-    -e "s/NAME/\${releaseName}/g" \\
-    -e "s/STEMCELL/\${stemcell}/g" \\
-    -e "s/ENVIRONMENT/\${releaseName}-\${ENVIRONMENT:-"dev"}/g" \\
-    "\${templatesPath}/stub.yml" > "\${tmpPath}/targeted-director-stub.yml"
+  cat > "\${tmpPath}/auto.yml" <<EOS
+---
+meta:
+  environment: \${releaseName}-\${ENVIRONMENT:-"dev"}
+  stemcell: \${stemcell}
+  security_groups:
+    - \${releaseName}
+name: \${releaseName}
+director_uuid: \${directorUUID}
+releases:
+  - name: \${releaseName}
+    version: latest
+EOS
 
-  echo "Merging templates using the spiff..."
+  echo "Merging templates using spruce..."
 
-  spiff merge \\
+  spruce merge --prune meta \\
     "\${templatesPath}/deployment.yml" \\
+    "\${tmpPath}/auto.yml" \\
     "\${templatesPath}/jobs.yml" \\
     "\${templatesPath}/infrastructure/\${infrastructure}.yml" \\
-    "\${tmpPath}/targeted-director-stub.yml" \\
     \$* > "\${manifestsPath}/\${deploymentName}-manifest.yml"
 
-  rm "\${tmpPath}/targeted-director-stub.yml"
+  rm "\${tmpPath}/auto.yml"
 
   echo bosh deployment "\${manifestsPath}/\${deploymentName}-manifest.yml"
   bosh deployment "\${manifestsPath}/\${deploymentName}-manifest.yml"
@@ -692,45 +699,25 @@ EOF
 
   chmod +x ${releaseName}-dev
 
-  cat > templates/stub.yml <<EOF
----
-meta:
-  environment: ENVIRONMENT
-  dns_root: microbosh
-  security_groups:
-    - ${releaseName}
-  stemcell:
-    name: STEMCELL
-
-director_uuid: DIRECTOR-UUID
-
-releases:
-  - name: ${releaseName}
-    version: latest
-EOF
-
   cat > templates/deployment.yml <<EOF
-meta:
-  environment: (( merge ))
-  stemcell: (( merge ))
+---
+name: (( param "Please provide a name for your deployment" ))
 
-name: (( meta.environment ))
+director_uuid: (( param "Please provide the BOSH Director UUID to deploy to" ))
 
-director_uuid: (( merge ))
+releases: (( param "Please provide the list of releases used in this deployment" ))
 
-releases: (( merge ))
+networks: (( param "Please define the networks for this deployment" ))
 
-networks: (( merge ))
+jobs: (( param "Please define the jobs for this deployment" ))
 
-jobs: (( merge ))
-
-properties: (( merge ))
+properties: {}
 
 compilation:
   workers: 6
   network: ${releaseName}
   reuse_compilation_vms: true
-  cloud_properties: (( merge ))
+  cloud_properties: (( param "The infrastructure templates forgot to define cloud properties for compilation VMs..." ))
 
 update:
   canaries: 1
@@ -742,15 +729,12 @@ update:
 resource_pools:
   - name: small_z1
     network: ${releaseName}
-    size: (( auto ))
-    stemcell: (( meta.stemcell ))
-    cloud_properties: (( merge ))
+    stemcell: (( grab meta.stemcell ))
+    cloud_properties: (( param "The infrastructure templates forgot to define the cloud properties for the small_z1 resource pool..." ))
 EOF
 
   cat > templates/jobs.yml <<EOF
-meta:
-  environment: ~
-
+---
 update:
   canaries: 1
   max_in_flight: 50
@@ -765,16 +749,11 @@ jobs:
       release: ${releaseName}
     instances: 0
     resource_pool: small_z1
-    networks: (( merge ))
     persistent_disk: 0
     update:
       canaries: 10
     properties:
       ${releaseName}:
-
-networks: (( merge ))
-
-properties: {}
 EOF
 
   cat > templates/infrastructure/warden.yml <<EOF
@@ -884,9 +863,6 @@ EOF
   cat > templates/infrastructure/aws-ec2.yml <<EOF
 ---
 meta:
-  environment: (( merge ))
-  dns_root: (( merge ))
-  security_groups: (( merge ))
   persistent_disk: 4096
 
   stemcell:
@@ -898,7 +874,7 @@ jobs:
     instances: 2
     networks:
       - name: ${releaseName}
-    persistent_disk: (( meta.persistent_disk ))
+    persistent_disk: (( grab meta.persistent_disk ))
     properties:
       ${releaseName}:
 
@@ -918,7 +894,7 @@ networks:
   - name: ${releaseName}
     type: dynamic
     cloud_properties:
-      security_groups: (( meta.security_groups ))
+      security_groups: (( grab meta.security_groups ))
 EOF
 
   cat > LICENSE <<EOF
@@ -1171,7 +1147,6 @@ createSrc() {
 # Name list is the list of names to create.
 #
 
-set -x
 declare releaseName
 jobs=()
 packages=()
