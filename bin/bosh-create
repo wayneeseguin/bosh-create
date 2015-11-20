@@ -762,7 +762,7 @@ meta:
   environment: ${releaseName}-warden
 
   stemcell:
-    name: bosh-warden-boshlite-ubuntu
+    name: bosh-aws-xen-centos-7-go_agent
     version: latest
 
 update:
@@ -866,7 +866,7 @@ meta:
   persistent_disk: 4096
 
   stemcell:
-    name: bosh-aws-xen-ubuntu
+    name: bosh-aws-xen-centos-7-go_agent
     version: latest
 
 jobs:
