@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 #
+# bosh-create is a script for creating
+#
 # Usage:
 #   release <name>
 #   jobs <job name>...
@@ -9,14 +11,18 @@
 # This currently represents *binary* jobs by default.
 # TODO: Add the concept of *script* jobs with the associated adjustments.
 
-fail() { echo $* >&2 ; exit 1 ; }
+set -o errexit # Exit immediately if a simple command exits with a non-zero status
+set -o nounset # Report usage of any uninitialized variables
+
+error() { echo -e "[$(date +'%Y-%m-%dT%H:%M:%S%z')]: $*" >&2 ; }
+fatal() { error "$*" ; exit 1 ; }
 
 createPackage() {
-  local _package=$1
-  mkdir -p {packages,src,blobs}/${_package}/
-  touch {packages,src,blobs}/${_package}/.gitkeep
+  local _package="$1"
+  mkdir -p {packages,src,blobs}/"${_package}"/
+  touch {packages,src,blobs}/"${_package}"/.gitkeep
 
-  cat > packages/${_package}/README.md <<EOF
+  cat > packages/"${_package}"/README.md <<EOF
 # ${_package} BOSH package
 
 ## packaging
@@ -39,7 +45,7 @@ names as well as a list of the blob files required by the package script.
 
 EOF
 
-  cat > packages/${_package}/packaging <<EOF
+  cat > "packages/${_package}/packaging" <<EOF
 #!/usr/bin/env bash
 set -e
 
@@ -58,7 +64,7 @@ make
 make install
 EOF
 
-  cat > packages/${_package}/prepare <<EOF
+  cat > "packages/${_package}/prepare" <<EOF
 #!/usr/bin/env bash
 
 # remove this line once you update the package
@@ -77,9 +83,9 @@ then
 fi
 EOF
 
-chmod +x packages/${_package}/{packaging,prepare}
+chmod +x "packages/${_package}"/{packaging,prepare}
 
-  cat > packages/${_package}/spec <<EOF
+  cat > "packages/${_package}"/spec <<EOF
 ---
 name: ${_package}
 dependencies: []
@@ -90,18 +96,18 @@ EOF
 }
 
 createJob() {
-  local jobName=${1}
+  local _jobName=${1}
   if ! [[ -d jobs ]]
-  then fail "No ./jobs directory found, if you intended this to be a release dir then create it and try again."
+  then fatal "No ./jobs directory found, if you intended this to be a release dir then create it and try again."
   fi
-  mkdir -p jobs/${jobName}
+  mkdir -p "jobs/${_jobName}"
 
-  jobDirs=( jobs/${jobName}/templates/{bin,config,shell} )
-  mkdir -p ${jobDirs[@]}
-  touch jobs/${jobName}/templates/config/.gitkeep
+  jobDirs=( "jobs/${_jobName}/templates"/{bin,config,shell} )
+  mkdir -p "${jobDirs[@]}"
+  touch "jobs/${_jobName}/templates/config/.gitkeep"
 
-  cat > jobs/${jobName}/README.md <<EOF
-# ${jobName} BOSH Service Job
+  cat > "jobs/${_jobName}/README.md" <<EOF
+# ${_jobName} BOSH Service Job
 
 [Official BOSH Release Documentation](http://bosh.io/docs/create-release.html)
 
@@ -122,7 +128,7 @@ The script should never be modified, it's sole purpose
 is to be called by the monit daemon to *start*, *stop* and *monitor* the job's
 binary executable.
 
-## templates/bin/${jobName}
+## templates/bin/${_jobName}
 
 By default this file is setup to exec an binary/script stored within the package
 path of the same name as the job. If you do not have a package with a binary
@@ -171,28 +177,28 @@ This is the BOSH service job specification file, it is used to declare:
 
 EOF
 
-  cat > jobs/${jobName}/templates/bin/control <<EOF
+  cat > "jobs/${_jobName}/templates/bin/control" <<EOF
 #!/usr/bin/env bash
 
 source "\$(dirname \$(dirname \${0}))/shell/env"
 
 trap graceful_stop SIGTERM # Handle term signal sent by control script stop action.
 
-if [[ -z \${1:-} ]] ; then fail "usage: \$0 start|stop" ; fi ; action=\$1 ; shift
+if [[ -z \${1:-} ]] ; then fatal "usage: \$0 start|stop" ; fi ; action=\$1 ; shift
 case \${action} in
   (start)
-    user exec \${pkgPath}/bin/${jobName}
+    user exec \${pkgPath}/bin/${_jobName}
     ;;
   (stop)
     send_signal TERM
     ;;
   (*)
-    fail "Unknown action ${action}, usage: \$0 start|stop"
+    fatal "Unknown action \${action}, usage: \$0 start|stop"
     ;;
 esac
 EOF
 
-  cat > jobs/${jobName}/templates/shell/env <<EOF
+  cat > "jobs/${_jobName}/templates/shell/env" <<EOF
 #!/usr/bin/env bash
 
 set -e # exit immediately if a simple command exits with a non-zero status
@@ -205,7 +211,7 @@ domainName="<%= spec.dns_domain_name %>"
 vmFullName="\${vmName}/\${vmIndex}" # full job name
 nodeName="\${deploymentName}-\${vmName}-\${vmIndex}"
 
-jobName="${jobName}"
+jobName="${_jobName}"
 
 logPath="/var/vcap/sys/log/\${jobName}"
 mkdir -p "\${logPath}"
@@ -214,7 +220,7 @@ echo -e "\$(date +'%Y-%m-%dT%H:%M:%S') \$(whoami) > \$0 \$*"
 
 source /var/vcap/jobs/\${jobName}/shell/functions
 
-<% if p('${jobName//-/_}.debug') == "true" %>turn_debugging_on<% end %>
+<% if p('${_jobName//-/_}.debug') == "true" %>turn_debugging_on<% end %>
 
 jobPath="/var/vcap/jobs/\${jobName}"
 pkgPath="/var/vcap/packages/\${jobName}"
@@ -238,7 +244,7 @@ set_pid
 
 EOF
 
-  cat > jobs/${jobName}/templates/shell/functions <<EOF
+  cat > "jobs/${_jobName}/templates/shell/functions" <<EOF
 #!/usr/bin/env bash
 
 fail() {
@@ -309,47 +315,47 @@ graceful_stop() {
 
 EOF
 
-  cat > jobs/${jobName}/monit <<EOF
-check process ${jobName}
-  with pidfile /var/vcap/sys/run/${jobName}/${jobName}.pid
-  start program "/var/vcap/jobs/${jobName}/bin/control start" with timeout 30 seconds
-  stop program "/var/vcap/jobs/${jobName}/bin/control stop"
+  cat > "jobs/${_jobName}/monit" <<EOF
+check process ${_jobName}
+  with pidfile /var/vcap/sys/run/${_jobName}/${_jobName}.pid
+  start program "/var/vcap/jobs/${_jobName}/bin/control start" with timeout 30 seconds
+  stop program "/var/vcap/jobs/${_jobName}/bin/control stop"
   group vcap
 EOF
 
-  cat > jobs/${jobName}/spec <<EOF
+  cat > "jobs/${_jobName}/spec" <<EOF
 ---
-name: ${jobName}
+name: ${_jobName}
 packages:
-- ${jobName}
+- ${_jobName}
 templates:
   bin/control: bin/control
-  bin/${jobName}: bin/${jobName}
+  bin/${_jobName}: bin/${_jobName}
   shell/env: shell/env
   shell/functions: shell/functions
 properties:
-  ${jobName//-/_}.debug:
+  ${_jobName//-/_}.debug:
     description: "Enable debug output, can be 'true' or 'false' (default)."
     default: "false"
 EOF
 
-  chmod +x jobs/${jobName}/templates/bin/*
+  chmod +x "jobs/${_jobName}/templates/bin"/*
 
-  echo "job ${jobName} created"
+  echo "job ${_jobName} created"
 }
 
 createRelease() {
   local releaseName=${1%-boshrelease}
 
-  mkdir -p ${releaseName}-boshrelease/
-  cd ${releaseName}-boshrelease
+  mkdir -p "${releaseName}-boshrelease/"
+  cd "${releaseName}-boshrelease"
 
   _dirs=(templates/infrastructure config packages src blobs jobs manifests stemcells docs)
-  for _dir in ${_dirs[@]}
-  do mkdir -p ${_dir} ; touch ${_dir}/.gitkeep
+  for _dir in "${_dirs[@]}"
+  do mkdir -p "${_dir}" ; touch "${_dir}/.gitkeep"
   done
 
-  cat > docs/${releaseName}.md <<EOF
+  cat > "docs/${releaseName}.md" <<EOF
 # ${releaseName} Project Specific Notes
 EOF
 
@@ -427,7 +433,7 @@ ls /var/vcap/store/*/
 
 EOF
 
-  cat > ${releaseName}-dev <<EOF
+  cat > "${releaseName}-dev" <<EOF
 #!/usr/bin/env bash
 
 set -e -u
@@ -436,7 +442,7 @@ fail() { echo -e "\$*" ; exit 1 ; }
 
 bosh_cli_check() {
   if ! command -v bosh &>/dev/null
-  then fail "'bosh' command was not found in your path, please 'gem install bosh_cli' and try again."
+  then fatal "'bosh' command was not found in your path, please 'gem install bosh_cli' and try again."
   fi
 }
 
@@ -447,7 +453,7 @@ bosh_target_check() {
       echo \${boshTarget}
       ;;
     (*)
-      fail "A bosh director is not targeted, please target a director and login then try again."
+      fatal "A bosh director is not targeted, please target a director and login then try again."
       ;;
   esac
 }
@@ -513,7 +519,7 @@ prepare_stemcell() {
   case \${infrastructure} in
     (aws-ec2)
       if [[ \${directorCPI} != aws ]]
-      then fail "No AWS BOSH Director targeted. Please use 'bosh target' first."
+      then fatal "No AWS BOSH Director targeted. Please use 'bosh target' first."
       fi
       hypervisor="xen"
       case \${stemcellOS} in
@@ -524,13 +530,13 @@ prepare_stemcell() {
           stemcellURL="http://bosh.io/stemcells/bosh-aws-xen-light-centos-7-go_agent"
           ;;
         (*)
-          fail "Unknown Stemcell OS '\${stemcellOS}'"
+          fatal "Unknown Stemcell OS '\${stemcellOS}'"
           ;;
       esac
       ;;
     (warden)
       if ! [[ "\${directorName}" =~ "Bosh Lite Director" ]]
-      then fail "No BOSH Lite  bosh-lite with warden CPI.\nPlease use 'bosh target' first."
+      then fatal "No BOSH Lite  bosh-lite with warden CPI.\nPlease use 'bosh target' first."
       fi
       hypervisor="warden"
       case \${stemcellOS} in
@@ -541,7 +547,7 @@ prepare_stemcell() {
           stemcellURL="https://bosh.io/d/stemcells/bosh-warden-boshlite-centos-go_agent"
           ;;
         (*)
-          fail "Unknown Stemcell OS '\${stemcellOS}'"
+          fatal "Unknown Stemcell OS '\${stemcellOS}'"
           ;;
       esac
       ;;
@@ -690,16 +696,16 @@ case \${action} in
     ;;
   (*)
     usage
-    fail "Unknown action \${action}."
+    fatal "Unknown action \${action}."
     ;;
 esac
 
 exit 0
 EOF
 
-  chmod +x ${releaseName}-dev
+  chmod +x "${releaseName}-dev"
 
-  cat > templates/deployment.yml <<EOF
+  cat > "templates/deployment.yml" <<EOF
 ---
 name: (( param "Please provide a name for your deployment" ))
 
@@ -733,7 +739,7 @@ resource_pools:
     cloud_properties: (( param "The infrastructure templates forgot to define the cloud properties for the small_z1 resource pool..." ))
 EOF
 
-  cat > templates/jobs.yml <<EOF
+  cat > "templates/jobs.yml" <<EOF
 ---
 update:
   canaries: 1
@@ -756,7 +762,7 @@ jobs:
       ${releaseName}:
 EOF
 
-  cat > templates/infrastructure/warden.yml <<EOF
+  cat > "templates/infrastructure/warden.yml" <<EOF
 ---
 meta:
   environment: ${releaseName}-warden
@@ -860,7 +866,7 @@ networks:
     static: []
 EOF
 
-  cat > templates/infrastructure/aws-ec2.yml <<EOF
+  cat > "templates/infrastructure/aws-ec2.yml" <<EOF
 ---
 meta:
   persistent_disk: 4096
@@ -897,7 +903,7 @@ networks:
       security_groups: (( grab meta.security_groups ))
 EOF
 
-  cat > LICENSE <<EOF
+  cat > "LICENSE" <<EOF
 The MIT License (MIT)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -919,21 +925,21 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 EOF
 
-  cat > config/final.yml <<EOF
+  cat > "config/final.yml" <<EOF
 ---
 final_name: ${releaseName}
 EOF
 
-  cat > config/dev.yml <<EOF
+  cat > "config/dev.yml" <<EOF
 ---
 dev_name: ${releaseName}
 EOF
 
-  cat > config/blobs.yml <<EOF
+  cat > "config/blobs.yml" <<EOF
 --- {}
 EOF
 
-  cat > config/settings.yml <<EOF
+  cat > "config/settings.yml" <<EOF
 ---
 provider:
   name: aws
@@ -946,7 +952,7 @@ blobstore:
   name: ${releaseName}-boshrelease
 EOF
 
-  cat > config/private.yml <<EOF
+  cat > "config/private.yml" <<EOF
 ---
 blobstore:
   s3:
@@ -955,7 +961,7 @@ blobstore:
 
 EOF
 
-cat > README.md <<EOF
+cat > "README.md" <<EOF
 # ${releaseName} BOSH release
 
 ## License
@@ -1103,10 +1109,10 @@ See \`docs/${releaseName}.md\` for release specific information.
 
 EOF
 
-  touch config/.gitkeep
+  touch "config/.gitkeep"
 
   git init
-  cat > .gitignore <<'EOF'
+  cat > ".gitignore" <<'EOF'
 #*
 *#
 *.swp
@@ -1153,44 +1159,50 @@ then # Enable xtrace with context if debug is true.
 fi
 
 declare releaseName
-jobs=()
-packages=()
-srcs=()
-while (( $# ))
-do
-  token=$1
-  shift 1
-  case ${token} in
-    (-job|-jobs|job|jobs) kind=job ;;
-    (-release|release) kind=release ;;
-    (package|packages|-package|-packages) kind=package ;;
-    (-src|src) kind=src ;;
-    (*)
-      case ${kind} in
-        (release) releaseName=$token ;;
-        (job) jobs+=($token) ;;
-        (package) packages+=($token) ;;
-        (src) srcs+=($token) ;;
-        (*) fail "One of -release,-job(s),-package(s),-src(s) must be given." ;;
-      esac
-      ;;
-  esac
-done
 
-if [[ -n ${releaseName} ]]
-then createRelease ${releaseName}
-fi
+main() {
+	local jobs=()
+	local packages=()
+	local srcs=()
 
-for job in ${jobs[@]}
-do createJob ${job}
-done
+	while (( $# ))
+	do
+		token="$1"
+		shift 1
+		case "${token}" in
+			(-job|-jobs|job|jobs) kind=job ;;
+			(-release|release) kind=release ;;
+			(package|packages|-package|-packages) kind=package ;;
+			(-src|src) kind=src ;;
+			(*)
+				case ${kind} in
+					(release) releaseName=$token ;;
+					(job) jobs+=($token) ;;
+					(package) packages+=($token) ;;
+					(src) srcs+=($token) ;;
+					(*) fatal "One of -release,-job(s),-package(s),-src(s) must be given." ;;
+				esac
+				;;
+		esac
+	done
 
-for package in ${packages[@]}
-do createPackage ${package}
-done
+	if [[ -n "${releaseName}" ]]
+	then createRelease "${releaseName}"
+	fi
 
-for src in ${srcs[@]}
-do createSrc ${package}
-done
+	for job in "${jobs[@]}"
+	do createJob "${job}"
+	done
+
+	for package in "${packages[@]}"
+	do createPackage "${package}"
+	done
+
+	for src in "${srcs[@]}"
+	do createSrc "${src}"
+	done
+}
+
+main "${@}"
 
 exit 0
